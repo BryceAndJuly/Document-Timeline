@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script type="text/javascript" src="./vis-timeline-graph2d.min.js"></script>
+  <title>时间轴</title>
+  <style>
+    body,
+    html {
+      font-family: arial, sans-serif;
+      font-size: 11pt;
+      background-color: #f1f1f1;
+    }
+
+    textarea {
+      width: 800px;
+      height: 50px;
+    }
+
+    .buttons {
+      margin: 5px 0;
+    }
+
+    .vis-timeline.vis-bottom.vis-ltr {
+      min-height: 550px;
+    }
+
+    div.time {
+      width: 354px;
+      height: 25px;
+      border-radius: 4px;
+      background-color: #f1f1f1;
+      ;
+      line-height: 25px;
+      color: black;
+      text-align: center;
+      margin: 10px auto;
+
+    }
+
+    input#load {
+      padding: 2px;
+      margin-right: 10px;
+    }
+
+    .inputArea {
+      height: 22px;
+      border: 1px solid #b0aeae;
+      outline: 0;
+      border-radius: 3px;
+      cursor: pointer;
+      padding: 0px;
+    }
+
+    #DateStart {
+      margin-left: 20px;
+    }
+
+    #time {
+      color: red;
+      font-weight: bold;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="buttons">
+    <input type="button" id="load" value="刷新" title="Refresh" />
+    <span id="totalNumOfDoc" style="display:inline-block;min-width:140px"></span>
+    <input type="Date" id="DateStart" class="inputArea">
+    &nbsp;~&nbsp;
+    <input type="Date" id="DateEnd" class="inputArea">
+    <input type="button" id="focus" value="聚焦" title="聚焦到该时间段内的文档" />
+    <input type="text" size="20" id="keyword" style="margin-left: 20px;height: 19px;padding: 0px 4px;">
+    <input type="button" id="search" value="搜索" title="检索包含关键字的文档" />
+    <span id="message" style="display:inline-block;margin-left: 21px;color: red;visibility: hidden;"></span>
+
+  </div>
+  <div id="visualization"></div>
+  <div class="time">当前悬浮节点对应时间：<span id="time"></span></div>
+
+  <script>
+    let btnLoad = document.getElementById("load");
+    let timeArea = document.getElementById('time');
+    let count = document.getElementById('totalNumOfDoc')
+    let DateStartInput = document.getElementById('DateStart');
+    let DateEndInput = document.getElementById('DateEnd');
+    let focusBtn = document.getElementById('focus');
+    let keywordInput = document.getElementById('keyword');
+    let searchBtn = document.getElementById('search');
+    let messageBox = document.getElementById('message');
+    let lock = false;
+
+
+    // 请求函数
+    function request(url, data = null, method = "POST") {
+      return new Promise((resolve, reject) => {
+        if (method.toUpperCase() == "POST") {
+          fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(data),
+          })
+            .then(
+              (data) => resolve(data.json()),
+              (error) => {
+                reject(error);
+              }
+            )
+            .catch((err) => {
+              console.error("请求失败:", err);
+            });
+        }
+      });
+    }
+
+    // 弹出提示信息
+    function showMessage(msg) {
+      messageBox.innerText = msg;
+      messageBox.style.visibility = "visible";
+      setTimeout(() => { messageBox.style.visibility = "hidden"; }, 1000)
+    }
+
+    // 挂件中根据ID打开文档
+    function _openFileById(id) {
+      const node = window.parent.document.querySelector('.fn__flex-1.protyle:not(.fn__none) div[data-node-id] div[contenteditable]');
+      if (node) {
+        try {
+          let tempNode = window.parent.document.createElement("span");
+          tempNode.setAttribute("data-id", id);
+          tempNode.setAttribute("data-type", "block-ref");
+          node.appendChild(tempNode);
+          tempNode.click();
+          tempNode.remove();
+        } catch (err) {
+          console.error(err)
+        }
+      }
+
+    }
+
+    // 查询的数据保存到该数组
+    let data = [];
+
+    // 查询文档
+    async function searchAllDocs_SQL() {
+      const stmt = "SELECT * FROM blocks WHERE  type ='d'"
+      let res = await request("/api/query/sql", { stmt });
+      if (res.code === 0 && res?.data.length > 0) {
+        const result = res.data;
+        for (let item of result) {
+          let tempObj = {}
+          tempObj.id = item.id;
+          tempObj.content = item.content;
+          let reg = /(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})/;
+          let timeData = item.created.match(reg)
+          tempObj.start = `${timeData[1]}-${timeData[2]}-${timeData[3]}T${timeData[4]}:${timeData[5]}:${timeData[6]}`
+          data.push(tempObj);
+        }
+        showMessage("查询完成");
+        count.innerText = `共查询到 ${result.length} 篇文档`;
+      }
+
+    }
+
+    // DataSet
+    let items = new vis.DataSet();
+
+    // create a timeline
+    let container = document.getElementById("visualization");
+    let options = {
+      editable: false,
+      maxHeight: "550px",
+      locale: 'en'
+    };
+
+    let timeline = new vis.Timeline(container, items, options);
+
+    // 加载数据
+    async function loadData() {
+      await searchAllDocs_SQL();
+      items.clear();
+      items.add(data);
+      timeline.fit();
+    }
+    // 加载一次数据
+    loadData();
+
+    // 刷新按钮
+    btnLoad.onclick = function () {
+      window.location.reload(true)
+    };
+
+    // (new Date()).Format("yyyy-MM-dd hh:mm:ss.S") ==> 2006-07-02 08:09:04.423 
+    Date.prototype.Format = function (fmt) {
+      let o = {
+        "M+": this.getMonth() + 1, //月份 
+        "d+": this.getDate(), //日 
+        "h+": this.getHours(), //小时 
+        "m+": this.getMinutes(), //分 
+        "s+": this.getSeconds(), //秒 
+        "q+": Math.floor((this.getMonth() + 3) / 3), //季度 
+        "S": this.getMilliseconds() //毫秒 
+      };
+      if (/(y+)/.test(fmt)) fmt = fmt.replace(RegExp.$1, (this.getFullYear() + "").substr(4 - RegExp.$1.length));
+      for (let k in o)
+        if (new RegExp("(" + k + ")").test(fmt)) fmt = fmt.replace(RegExp.$1, (RegExp.$1.length == 1) ? (o[k]) : (("00" + o[k]).substr(("" + o[k]).length)));
+      return fmt;
+    }
+
+    // 双击时间轴上的item
+    timeline.on('doubleClick', function (properties) {
+      if (properties.item) {
+        try {
+          // 打开文档
+          _openFileById(properties.item.trim())
+          // window.open(`siyuan://blocks/${properties.item.trim()}`)
+        } catch (err) {
+          console.error(err)
+        }
+      }
+    });
+    // debounce
+    function debounce(func, wait = 100) {
+      let timer = null;
+      return function (...args) {
+        clearTimeout(timer);
+        timer = setTimeout(() => {
+          func.apply(this, args)
+        }, wait);
+      }
+    }
+    // 悬浮item时，底部显示item对应时间
+    function promptTime(properties) {
+      if (properties.item) {
+        let timeStr = properties.item.split('-')[0];
+        let reg = /(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})/;
+        let timeData = timeStr.match(reg)
+        timeArea.innerText = `${timeData[1]}年${timeData[2]}月${timeData[3]}日 ${timeData[4]}:${timeData[5]}:${timeData[6]}`
+      }
+    }
+
+    timeline.on('mouseOver', debounce(promptTime));
+
+    // 用localStorage存储一下，否则一刷新就要重新填日期很费劲
+    let startingTime, endTime;
+    if (localStorage.getItem('filterStartDate') && localStorage.getItem('filterEndDate')) {
+      startingTime = JSON.parse(localStorage.getItem('filterStartDate'));
+      DateStartInput.value = startingTime;
+      endTime = JSON.parse(localStorage.getItem('filterEndDate'));
+      DateEndInput.value = endTime;
+    }
+
+    // 日期输入框
+    DateStartInput.addEventListener('change', (e) => {
+      startingTime = e.target.value;
+      localStorage.setItem("filterStartDate", JSON.stringify(startingTime))
+    }, false)
+    DateEndInput.addEventListener('change', (e) => {
+      endTime = e.target.value;
+      localStorage.setItem("filterEndDate", JSON.stringify(endTime))
+    }, false)
+
+    // 聚焦到某一时间端内的文档
+    async function handleFocus() {
+      if (startingTime && endTime) {
+        let start = Date.parse(new Date(`${startingTime} 00:00:00`));
+        let end = Date.parse(new Date(`${endTime} 23:59:59`))
+        if (start > end) {
+          showMessage('起始时间不能大于结束时间！');
+        } else {
+          if (data.length > 0) {
+            let itemIDArr = [];
+            data.forEach((item) => {
+              let itemTimestamp = new Date(item.start).getTime();
+              if (start <= itemTimestamp && itemTimestamp <= end) {
+                itemIDArr.push(item.id)
+              }
+            })
+            if (itemIDArr.length > 0) {
+              showMessage('正在聚焦到该时间段')
+              // 标记
+              if (lock) {
+                // 如果时间轴当前渲染的不是全部数据，则需要重新渲染一下
+                items.clear();
+                items.add(data);
+                lock = false;
+              }
+
+              timeline.focus(itemIDArr);
+
+            } else {
+              showMessage('该时间段未查询到文档！')
+            }
+
+          }
+        }
+      } else {
+        showMessage('请先设置好起止时间')
+      }
+    }
+    focusBtn.addEventListener('click', handleFocus, false);
+
+
+
+    // 使用关键字检索文档名
+    async function handleSearch() {
+      let keyword = keywordInput.value.trim();
+      let keywordArr = keyword.split(" ").filter(item => item.trim());
+      if (keywordArr.length > 0) {
+        let res = [];
+        for (let item of data) {
+          if (keywordArr.every((word) => item.content.includes(word))) {
+            res.push(item)
+          }
+        }
+        if (res.length > 0) {
+          // 只渲染搜索到的结果
+          showMessage('正在渲染搜索结果')
+          items.clear();
+          items.add(res);
+          timeline.fit();
+          // 设置标志符，表示当前展示的数据已经发生变更
+          lock = true;
+        } else {
+          showMessage('未检索到对应文档')
+        }
+      } else {
+        showMessage('关键字为空')
+      }
+    }
+
+    keywordInput.addEventListener('keydown', (e) => {
+      if (e.key === "Enter") {
+        handleSearch();
+      }
+    });
+    searchBtn.addEventListener('click', debounce(handleSearch, 700));
+
+  </script>
+
+</body>
+
+</html>
